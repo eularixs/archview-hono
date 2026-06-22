@@ -3,12 +3,19 @@
   "version": "0.0.1",
   "description": "Live architecture flow graph for TypeScript backends",
   "type": "module",
-  "module": "src/index.ts",
-  "types": "src/index.ts",
-  "exports": { ".": "./src/index.ts" },
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "compile": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "bun run compile"
   },
   "license": "MIT",
   "author": "Eularix",
@@ -17,7 +24,30 @@
     "hono": "^4.6.0"
   },
   "devDependencies": {
-    "typescript": "^5.6.0",
-    "@types/bun": "latest"
-  }
+    "@types/bun": "latest",
+    "@types/node": "^26.0.0",
+    "typescript": "^5.6.0"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "architecture",
+    "graph",
+    "visualization",
+    "hono",
+    "trpc",
+    "nestjs",
+    "static-analysis",
+    "ts-morph",
+    "cqrs"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eularixs/archview-hono.git"
+  },
+  "homepage": "https://archview.eularix.dev"
 }
