@@ -4,6 +4,7 @@ import { editorURL, LAYER_ORDER } from "./graph.js";
 import { Classifier } from "./classify.js";
 import type { Result } from "./analyzer.js";
 import type { Route } from "./routes.js";
+import { detectBuses } from "./buses.js";
 import type { ResolvedOptions } from "./options.js";
 
 const LAYERED = new Set(["controller", "service", "repository"]);
@@ -22,6 +23,12 @@ export function buildGraph(res: Result, routes: Route[], cl: Classifier, opts: R
   const out = new Map<Node, Node[]>();
   for (const e of res.callEdges) if (funcs.has(e.from) && funcs.has(e.to)) push(out, e.from, e.to);
 
+  const dispatches = opts.detectBuses ? detectBuses(res) : [];
+  const dispatchPair = new Set<string>(); // "callerId->handlerId" rendered as dispatch
+  for (const d of dispatches) for (const h of d.handlers) {
+    if (funcs.has(d.caller) && funcs.has(h)) push(out, d.caller, h);
+  }
+
   for (const [n, f] of funcs) {
     const { layer, module } = cl.classify(f.pkg);
     layerOf.set(n, layer);
@@ -29,6 +36,10 @@ export function buildGraph(res: Result, routes: Route[], cl: Classifier, opts: R
     if (LAYERED.has(layer)) included.add(n);
   }
   for (const r of routes) if (r.handler && funcs.has(r.handler)) included.add(r.handler);
+  for (const d of dispatches) {
+    if (funcs.has(d.caller)) included.add(d.caller);
+    for (const h of d.handlers) if (funcs.has(h)) included.add(h);
+  }
 
   if (opts.autoLayer) {
     const entries = new Set<Node>();
@@ -86,6 +97,14 @@ export function buildGraph(res: Result, routes: Route[], cl: Classifier, opts: R
   };
 
   const id = (n: Node) => funcs.get(n)!.id;
+  const routeHandlers = new Set<Node>();
+  for (const r of routes) if (r.handler) routeHandlers.add(r.handler);
+  for (const d of dispatches) for (const h of d.handlers) {
+    if (included.has(d.caller) && included.has(h)) dispatchPair.add(id(d.caller) + "->" + id(h));
+    // A command/query handler is application-layer; reclassify off "controller"
+    // (its file is often *.handler.ts) unless it is itself a route handler.
+    if (included.has(h) && !routeHandlers.has(h) && layerOf.get(h) === "controller") layerOf.set(h, "service");
+  }
   const g: Graph = { module: res.module, nodes: [], edges: [] };
 
   for (const n of included) {
@@ -98,7 +117,7 @@ export function buildGraph(res: Result, routes: Route[], cl: Classifier, opts: R
   const seen = new Set<string>();
   for (const n of included) for (const m of reachInc(n)) {
     const k = id(n) + "->" + id(m);
-    if (id(n) === id(m) || seen.has(k) || suppress.has(k)) continue;
+    if (id(n) === id(m) || seen.has(k) || suppress.has(k) || dispatchPair.has(k)) continue;
     seen.add(k);
     g.edges.push({ from: id(n), to: id(m), kind: "call" });
   }
@@ -115,6 +134,15 @@ export function buildGraph(res: Result, routes: Route[], cl: Classifier, opts: R
       });
     }
     if (r.handler && included.has(r.handler)) g.edges.push({ from: epID, to: id(r.handler), kind: "route" });
+  }
+
+  const dseen = new Set<string>();
+  for (const d of dispatches) for (const h of d.handlers) {
+    if (!included.has(d.caller) || !included.has(h)) continue;
+    const k = id(d.caller) + "->" + id(h);
+    if (dseen.has(k)) continue;
+    dseen.add(k);
+    g.edges.push({ from: id(d.caller), to: id(h), kind: "dispatch" });
   }
 
   for (const p of ports) {

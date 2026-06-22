@@ -16,3 +16,12 @@ test("hono-mvc: endpoint -> controller -> service -> repository", () => {
   expect(kinds.has("route")).toBe(true);
   expect(kinds.has("call")).toBe(true);
 });
+
+test("cqrs: dispatch routes controller -> command handler -> repo", () => {
+  const g = analyze({ root: "./examples/cqrs", detectBuses: true });
+  const layer = (l: string) => g.nodes.filter((n) => n.layer === l).map((n) => n.label);
+  expect(layer("controller")).toContain("(UserController).create");
+  expect(layer("service")).toContain("(CreateUserHandler).execute");
+  expect(layer("repository")).toContain("(UserRepo).save");
+  expect(g.edges.some((e) => e.kind === "dispatch")).toBe(true);
+});
