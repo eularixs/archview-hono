@@ -25,3 +25,12 @@ test("cqrs: dispatch routes controller -> command handler -> repo", () => {
   expect(layer("repository")).toContain("(UserRepo).save");
   expect(g.edges.some((e) => e.kind === "dispatch")).toBe(true);
 });
+
+test("trpc: query/mutation procedures become endpoints -> service -> repo", () => {
+  const g = analyze({ root: "./examples/trpc" });
+  const eps = g.nodes.filter((n) => n.kind === "endpoint");
+  expect(eps.some((e) => e.method === "QUERY" && e.path === "/listUsers")).toBe(true);
+  expect(eps.some((e) => e.method === "MUTATION" && e.path === "/createUser")).toBe(true);
+  expect(g.nodes.filter((n) => n.layer === "service").length).toBe(2);
+  expect(g.nodes.filter((n) => n.layer === "repository").length).toBe(2);
+});

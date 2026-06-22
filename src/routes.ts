@@ -15,10 +15,26 @@ export interface Route {
   col: number;
 }
 
+const PROC_KINDS: Record<string, string> = { query: "QUERY", mutation: "MUTATION", subscription: "SUB" };
+
+// Resolve a route's handler argument to a project Func node. A direct function
+// reference resolves by symbol; an inline arrow ((c) => ctl.list(c)) resolves to
+// the first project call it makes.
+function resolveHandler(res: Result, last: Node): Node | undefined {
+  let handler = res.resolveFunc(last);
+  if (!handler && (Node.isArrowFunction(last) || Node.isFunctionExpression(last))) {
+    for (const inner of last.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+      const h = res.resolveFunc(inner.getExpression());
+      if (h) { handler = h; break; }
+    }
+  }
+  return handler;
+}
+
 // Generic router extractor: X.<verb>("/path", ...handler) — Hono, Express,
 // Fastify, Elysia, … matched by verb name, string path, function-ish last arg.
 export function extractRoutes(res: Result): Route[] {
-  const out: Route[] = [];
+  const out: Route[] = [...extractTrpc(res)];
   for (const sf of res.sourceFiles) {
     for (const call of sf.getDescendantsOfKind(SyntaxKind.CallExpression)) {
       const expr = call.getExpression();
@@ -30,16 +46,62 @@ export function extractRoutes(res: Result): Route[] {
       const pathArg = args[0];
       if (!Node.isStringLiteral(pathArg)) continue;
       const last = args[args.length - 1];
-      let handler = res.resolveFunc(last);
-      if (!handler && (Node.isArrowFunction(last) || Node.isFunctionExpression(last))) {
-        // inline handler like (c) => ctl.list(c): use the first call it makes
-        for (const inner of last.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-          const h = res.resolveFunc(inner.getExpression());
-          if (h) { handler = h; break; }
-        }
-      }
+      const handler = resolveHandler(res, last);
       const { line, column } = sf.getLineAndColumnAtPos(call.getStart());
       out.push({ method: verb, path: pathArg.getLiteralValue(), handler, file: sf.getFilePath(), line, col: column });
+    }
+  }
+  return out;
+}
+
+// tRPC extractor — RPC for the TS world. A router({ proc: t.procedure.query(fn),
+// ... }) maps each property to an endpoint; .query/.mutation/.subscription set
+// the kind and the last call argument is the resolver. Nested routers join with
+// a dot prefix (user.get).
+export function extractTrpc(res: Result): Route[] {
+  const out: Route[] = [];
+  const isRouterCall = (call: Node): boolean => {
+    if (!Node.isCallExpression(call)) return false;
+    const expr = call.getExpression();
+    const name = (Node.isPropertyAccessExpression(expr) ? expr.getName() : expr.getText()).toLowerCase();
+    return name === "router" || name.endsWith("router");
+  };
+  const walkRouter = (obj: Node, prefix: string, sf: (typeof res.sourceFiles)[number]) => {
+    if (!Node.isObjectLiteralExpression(obj)) return;
+    for (const prop of obj.getProperties()) {
+      if (!Node.isPropertyAssignment(prop)) continue;
+      const key = prop.getName();
+      const val = prop.getInitializerOrThrow();
+      const path = prefix ? `${prefix}.${key}` : key;
+      // nested router({...})
+      if (isRouterCall(val)) {
+        const arg0 = (val as any).getArguments?.()[0];
+        if (arg0) walkRouter(arg0, path, sf);
+        continue;
+      }
+      // procedure chain: find the .query/.mutation/.subscription call
+      const calls = Node.isCallExpression(val) ? [val, ...val.getDescendantsOfKind(SyntaxKind.CallExpression)] : [];
+      for (const c of calls) {
+        const e = c.getExpression();
+        if (!Node.isPropertyAccessExpression(e)) continue;
+        const kind = PROC_KINDS[e.getName()];
+        if (!kind) continue;
+        const cargs = c.getArguments();
+        const handler = cargs.length ? resolveHandler(res, cargs[cargs.length - 1]) : undefined;
+        const { line, column } = sf.getLineAndColumnAtPos(prop.getStart());
+        out.push({ method: kind, path: "/" + path, handler, file: sf.getFilePath(), line, col: column });
+        break;
+      }
+    }
+  };
+  for (const sf of res.sourceFiles) {
+    for (const call of sf.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+      if (!isRouterCall(call)) continue;
+      // skip nested routers (reached via walkRouter from their parent)
+      const parent = call.getParent();
+      if (parent && Node.isPropertyAssignment(parent)) continue;
+      const arg0 = call.getArguments()[0];
+      if (arg0) walkRouter(arg0, "", sf);
     }
   }
   return out;
