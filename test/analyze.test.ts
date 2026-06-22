@@ -34,3 +34,19 @@ test("trpc: query/mutation procedures become endpoints -> service -> repo", () =
   expect(g.nodes.filter((n) => n.layer === "service").length).toBe(2);
   expect(g.nodes.filter((n) => n.layer === "repository").length).toBe(2);
 });
+
+test("nestjs: @Controller/@Get/@Post methods become endpoints", () => {
+  const g = analyze({ root: "./examples/nest" });
+  const eps = g.nodes.filter((n) => n.kind === "endpoint").map((e) => `${e.method} ${e.path}`);
+  expect(eps).toContain("GET /users");
+  expect(eps).toContain("GET /users/:id");
+  expect(eps).toContain("POST /users");
+  expect(g.nodes.filter((n) => n.layer === "service").length).toBe(2);
+});
+
+test("websocket: upgradeWebSocket route is labeled WS", () => {
+  const g = analyze({ root: "./examples/ws" });
+  const eps = g.nodes.filter((n) => n.kind === "endpoint");
+  expect(eps.some((e) => e.method === "WS" && e.path === "/ws")).toBe(true);
+  expect(eps.some((e) => e.method === "GET" && e.path === "/health")).toBe(true);
+});

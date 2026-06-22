@@ -3,7 +3,7 @@ import type { Result } from "./analyzer.js";
 
 const VERBS: Record<string, string> = {
   get: "GET", post: "POST", put: "PUT", delete: "DELETE",
-  patch: "PATCH", options: "OPTIONS", head: "HEAD", all: "ANY",
+  patch: "PATCH", options: "OPTIONS", head: "HEAD", all: "ANY", ws: "WS",
 };
 
 export interface Route {
@@ -34,7 +34,7 @@ function resolveHandler(res: Result, last: Node): Node | undefined {
 // Generic router extractor: X.<verb>("/path", ...handler) — Hono, Express,
 // Fastify, Elysia, … matched by verb name, string path, function-ish last arg.
 export function extractRoutes(res: Result): Route[] {
-  const out: Route[] = [...extractTrpc(res)];
+  const out: Route[] = [...extractTrpc(res), ...extractNest(res)];
   for (const sf of res.sourceFiles) {
     for (const call of sf.getDescendantsOfKind(SyntaxKind.CallExpression)) {
       const expr = call.getExpression();
@@ -47,8 +47,14 @@ export function extractRoutes(res: Result): Route[] {
       if (!Node.isStringLiteral(pathArg)) continue;
       const last = args[args.length - 1];
       const handler = resolveHandler(res, last);
+      let method = verb;
+      if (verb !== "WS") {
+        for (const a of args) {
+          if (Node.isCallExpression(a) && /upgradeWebSocket|upgradeWebsocket/.test(a.getExpression().getText())) { method = "WS"; break; }
+        }
+      }
       const { line, column } = sf.getLineAndColumnAtPos(call.getStart());
-      out.push({ method: verb, path: pathArg.getLiteralValue(), handler, file: sf.getFilePath(), line, col: column });
+      out.push({ method, path: pathArg.getLiteralValue(), handler, file: sf.getFilePath(), line, col: column });
     }
   }
   return out;
@@ -102,6 +108,36 @@ export function extractTrpc(res: Result): Route[] {
       if (parent && Node.isPropertyAssignment(parent)) continue;
       const arg0 = call.getArguments()[0];
       if (arg0) walkRouter(arg0, "", sf);
+    }
+  }
+  return out;
+}
+
+const NEST_VERBS: Record<string, string> = { Get: "GET", Post: "POST", Put: "PUT", Delete: "DELETE", Patch: "PATCH", Options: "OPTIONS", Head: "HEAD", All: "ANY" };
+
+// NestJS controller extractor: an @Controller('prefix') class whose methods
+// carry @Get(':id')/@Post()/… decorators. Each method is an endpoint at
+// prefix + method path, bound to the method itself.
+export function extractNest(res: Result): Route[] {
+  const out: Route[] = [];
+  const decoArg = (text: string | undefined): string =>
+    text && /^["'`]/.test(text.trim()) ? text.trim().slice(1, -1) : "";
+  for (const sf of res.sourceFiles) {
+    for (const cls of sf.getClasses()) {
+      const ctrl = cls.getDecorator("Controller");
+      if (!ctrl) continue;
+      const prefix = decoArg(ctrl.getArguments()[0]?.getText());
+      for (const m of cls.getMethods()) {
+        for (const dec of m.getDecorators()) {
+          const verb = NEST_VERBS[dec.getName()];
+          if (!verb) continue;
+          const sub = decoArg(dec.getArguments()[0]?.getText());
+          const path = "/" + [prefix, sub].filter(Boolean).join("/").replace(/^\/+/, "");
+          const { line, column } = sf.getLineAndColumnAtPos(m.getNameNode().getStart());
+          out.push({ method: verb, path, handler: m, file: sf.getFilePath(), line, col: column });
+          break;
+        }
+      }
     }
   }
   return out;
