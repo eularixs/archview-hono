@@ -156,6 +156,7 @@ export function buildGraph(res: Result, routes: Route[], cl: Classifier, opts: R
 
   pruneIsolated(g);
   pruneDisconnected(g);
+  if (opts.lintLayers) lintLayers(g);
   sortGraph(g);
   return g;
 }
@@ -180,4 +181,24 @@ function sortGraph(g: Graph) {
   const ord = (l: string) => { const i = (LAYER_ORDER as readonly string[]).indexOf(l); return i < 0 ? 99 : i; };
   g.nodes.sort((a, b) => ord(a.layer) - ord(b.layer) || a.module.localeCompare(b.module) || a.label.localeCompare(b.label));
   g.edges.sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to) || a.kind.localeCompare(b.kind));
+}
+
+const LAYER_RANK: Record<string, number> = {
+  endpoint: 0, controller: 1, service: 2, port: 3, repository: 4, other: 5,
+};
+
+// lintLayers marks architecture smells on call edges: a backward dependency
+// (reverse), a controller reaching the repository past the service (skip), or a
+// call into another module's internals (cross-module).
+function lintLayers(g: Graph) {
+  const node = new Map(g.nodes.map((n) => [n.id, n]));
+  const classified = (l: string) => l === "controller" || l === "service" || l === "repository";
+  for (const e of g.edges) {
+    if (e.kind !== "call") continue;
+    const a = node.get(e.from), b = node.get(e.to);
+    if (!a || !b || !classified(a.layer) || !classified(b.layer)) continue;
+    if (LAYER_RANK[b.layer] < LAYER_RANK[a.layer]) e.violation = "reverse";
+    else if (a.layer === "controller" && b.layer === "repository") e.violation = "skip";
+    else if (a.module && b.module && a.module !== b.module) e.violation = "cross-module";
+  }
 }

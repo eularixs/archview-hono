@@ -1,9 +1,9 @@
 import { UserService } from "./service.js";
 
 // Local stand-ins for @nestjs/common decorators.
-function Controller(_p?: string): ClassDecorator { return () => {}; }
-function Get(_p?: string): MethodDecorator { return () => {}; }
-function Post(_p?: string): MethodDecorator { return () => {}; }
+const Controller = (_p?: string): any => () => {};
+const Get = (_p?: string): any => () => {};
+const Post = (_p?: string): any => () => {};
 
 @Controller("users")
 export class UserController {

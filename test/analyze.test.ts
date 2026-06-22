@@ -50,3 +50,10 @@ test("websocket: upgradeWebSocket route is labeled WS", () => {
   expect(eps.some((e) => e.method === "WS" && e.path === "/ws")).toBe(true);
   expect(eps.some((e) => e.method === "GET" && e.path === "/health")).toBe(true);
 });
+
+test("linter: controller -> repository is flagged skip", () => {
+  const g = analyze({ root: "./examples/badarch", lintLayers: true });
+  const v = g.edges.filter((e) => e.violation);
+  expect(v.length).toBeGreaterThanOrEqual(1);
+  expect(v.some((e) => e.violation === "skip")).toBe(true);
+});
