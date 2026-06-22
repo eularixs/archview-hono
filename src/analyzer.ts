@@ -15,11 +15,23 @@ export interface Func {
   generated: boolean;
 }
 
+/** An outbound interface port: callers depend on it, repo-layer classes implement it. */
+export interface Port {
+  name: string;
+  pkg: string;
+  file: string;
+  line: number;
+  col: number;
+  implMethods: Node[];
+  callers: Node[];
+}
+
 export interface Result {
   module: string;
   root: string;
   funcs: Map<Node, Func>;
   callEdges: Array<{ from: Node; to: Node }>;
+  ports: Port[];
   /** Resolve a handler expression (route argument) to a project Func node. */
   resolveFunc(expr: Node): Node | undefined;
   sourceFiles: SourceFile[];
@@ -84,11 +96,15 @@ export function load(root: string): Result {
   // interface method -> implementer method nodes (CHA-ish, name based)
   const impls = new Map<string, Node[]>();
   const ifaceMethods = new Map<string, Set<string>>();
+  const ifaceDecl = new Map<string, import("ts-morph").InterfaceDeclaration>();
+  const portImpls = new Map<string, Node[]>();
+  const portCallers = new Map<string, Set<Node>>();
   for (const sf of sfs) {
     for (const iface of sf.getInterfaces()) {
       const set = new Set<string>();
       for (const m of iface.getMethods()) set.add(m.getName());
       ifaceMethods.set(iface.getName(), set);
+      ifaceDecl.set(iface.getName(), iface);
     }
   }
   for (const sf of sfs) {
@@ -101,6 +117,7 @@ export function load(root: string): Result {
           if (methods.has(m.getName())) {
             const key = `${ifn}.${m.getName()}`;
             (impls.get(key) ?? impls.set(key, []).get(key)!).push(m);
+            (portImpls.get(ifn) ?? portImpls.set(ifn, []).get(ifn)!).push(m);
           }
         }
       }
@@ -142,6 +159,14 @@ export function load(root: string): Result {
     const body = (fnNode as any).getBody?.();
     if (!body) continue;
     for (const call of body.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+      const csym = call.getExpression().getSymbol();
+      for (const d of csym?.getDeclarations() ?? []) {
+        if (Node.isMethodSignature(d)) {
+          const ifc = d.getParent();
+          if (ifc && Node.isInterfaceDeclaration(ifc) && portImpls.has(ifc.getName()))
+            (portCallers.get(ifc.getName()) ?? portCallers.set(ifc.getName(), new Set()).get(ifc.getName())!).add(fnNode);
+        }
+      }
       for (const callee of resolveExpr(call.getExpression())) {
         if (callee === fnNode) continue;
         const k = f.id + "->" + (byDecl.get(callee)?.id ?? "");
@@ -153,8 +178,27 @@ export function load(root: string): Result {
   }
 
   const resolveFunc = (expr: Node): Node | undefined => resolveExpr(expr)[0];
+
+  // outbound interface ports: an interface with implementers and ≥1 caller
+  const ports: Port[] = [];
+  for (const [name, implNodes] of portImpls) {
+    const iface = ifaceDecl.get(name);
+    if (!iface) continue;
+    const sf = iface.getSourceFile();
+    const { line, column } = sf.getLineAndColumnAtPos(iface.getNameNode().getStart());
+    ports.push({
+      name,
+      pkg: relPkg(sf),
+      file: sf.getFilePath(),
+      line,
+      col: column,
+      implMethods: [...new Set(implNodes)],
+      callers: [...(portCallers.get(name) ?? [])],
+    });
+  }
+
   // drop generated funcs from the func set (but keep for route resolution? routes resolve to impl which is non-generated)
   for (const [n, f] of [...funcs]) if (f.generated) funcs.delete(n);
 
-  return { module, root, funcs, callEdges, resolveFunc, sourceFiles: sfs };
+  return { module, root, funcs, callEdges, ports, resolveFunc, sourceFiles: sfs };
 }

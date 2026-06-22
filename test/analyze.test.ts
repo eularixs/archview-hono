@@ -9,6 +9,9 @@ test("hono-mvc: endpoint -> controller -> service -> repository", () => {
   expect(byLayer("service")).toBe(2);
   expect(byLayer("repository")).toBe(2);
   // flow connectivity
+  const g2 = analyze({ root: "./examples/hono-mvc", showPorts: true });
+  expect(g2.nodes.filter((n) => n.layer === "port").length).toBe(1);
+  expect(g2.edges.some((e) => e.kind === "implements")).toBe(true);
   const kinds = new Set(g.edges.map((e) => e.kind));
   expect(kinds.has("route")).toBe(true);
   expect(kinds.has("call")).toBe(true);

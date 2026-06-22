@@ -50,6 +50,25 @@ export function buildGraph(res: Result, routes: Route[], cl: Classifier, opts: R
     }
   }
 
+  // Outbound ports: an interface implemented by a repository-layer class. The
+  // direct caller -> impl call is replaced by caller -> port (call) and
+  // impl -> port (implements).
+  type OutPort = { id: string; module: string; label: string; pkg: string; file: string; line: number; col: number; callers: Node[]; impls: Node[] };
+  const ports: OutPort[] = [];
+  const suppress = new Set<string>();
+  if (opts.showPorts) {
+    for (const p of res.ports) {
+      const impls = p.implMethods.filter((n) => included.has(n));
+      const outbound = impls.some((n) => layerOf.get(n) === "repository");
+      if (!outbound || impls.length === 0) continue;
+      const callers = p.callers.filter((n) => included.has(n));
+      const { module } = cl.classify(p.pkg);
+      const portID = `port:${p.pkg}.${p.name}`;
+      ports.push({ id: portID, module, label: p.name, pkg: p.pkg, file: p.file, line: p.line, col: p.col, callers, impls });
+      for (const c of callers) for (const m of impls) suppress.add(funcs.get(c)!.id + "->" + funcs.get(m)!.id);
+    }
+  }
+
   const reachInc = (start: Node): Set<Node> => {
     const found = new Set<Node>();
     const visited = new Set<Node>([start]);
@@ -79,7 +98,7 @@ export function buildGraph(res: Result, routes: Route[], cl: Classifier, opts: R
   const seen = new Set<string>();
   for (const n of included) for (const m of reachInc(n)) {
     const k = id(n) + "->" + id(m);
-    if (id(n) === id(m) || seen.has(k)) continue;
+    if (id(n) === id(m) || seen.has(k) || suppress.has(k)) continue;
     seen.add(k);
     g.edges.push({ from: id(n), to: id(m), kind: "call" });
   }
@@ -96,6 +115,15 @@ export function buildGraph(res: Result, routes: Route[], cl: Classifier, opts: R
       });
     }
     if (r.handler && included.has(r.handler)) g.edges.push({ from: epID, to: id(r.handler), kind: "route" });
+  }
+
+  for (const p of ports) {
+    g.nodes.push({
+      id: p.id, kind: "port", label: p.label, layer: "port", module: p.module,
+      pkg: p.pkg, file: p.file, line: p.line, editorURL: editorURL(opts.editor, p.file, p.line, p.col),
+    });
+    for (const c of p.callers) g.edges.push({ from: funcs.get(c)!.id, to: p.id, kind: "call" });
+    for (const m of p.impls) g.edges.push({ from: funcs.get(m)!.id, to: p.id, kind: "implements" });
   }
 
   pruneIsolated(g);
