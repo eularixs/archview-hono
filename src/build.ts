@@ -41,6 +41,10 @@ export function buildGraph(res: Result, routes: Route[], cl: Classifier, opts: R
     for (const h of d.handlers) if (funcs.has(h)) included.add(h);
   }
 
+  // Trivial helpers — unexported free functions — are collapsed through (the
+  // reachInc walk skips non-included nodes) unless ShowHelpers asks to keep them.
+  const isHelper = (n: Node) => { const f = funcs.get(n)!; return !f.recv && !f.exported; };
+
   if (opts.autoLayer) {
     const entries = new Set<Node>();
     for (const n of included) if (layerOf.get(n) === "controller") entries.add(n);
@@ -59,6 +63,11 @@ export function buildGraph(res: Result, routes: Route[], cl: Classifier, opts: R
       for (const c of out.get(n) ?? []) if (c !== n && reach.has(c)) { intermediate = true; break; }
       layerOf.set(n, intermediate ? "service" : "repository");
     }
+  }
+
+  if (!opts.showHelpers) {
+    const routeH = new Set(routes.map((r) => r.handler).filter(Boolean) as Node[]);
+    for (const n of [...included]) if (isHelper(n) && !routeH.has(n)) included.delete(n);
   }
 
   // Outbound ports: an interface implemented by a repository-layer class. The

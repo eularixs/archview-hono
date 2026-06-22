@@ -57,3 +57,13 @@ test("linter: controller -> repository is flagged skip", () => {
   expect(v.length).toBeGreaterThanOrEqual(1);
   expect(v.some((e) => e.violation === "skip")).toBe(true);
 });
+
+test("helpers: unexported free function collapses unless showHelpers", () => {
+  const off = analyze({ root: "./examples/helpers", showHelpers: false });
+  const on = analyze({ root: "./examples/helpers", showHelpers: true });
+  const labels = (g: typeof off) => g.nodes.filter((n) => n.kind === "func").map((n) => n.label);
+  expect(labels(off)).not.toContain("fetchUsers");
+  expect(labels(on)).toContain("fetchUsers");
+  // collapsed edge goes straight to the service
+  expect(off.edges.some((e) => e.kind === "call")).toBe(true);
+});
