@@ -67,3 +67,9 @@ test("helpers: unexported free function collapses unless showHelpers", () => {
   // collapsed edge goes straight to the service
   expect(off.edges.some((e) => e.kind === "call")).toBe(true);
 });
+
+test("mount: nested app.route prefixes join", () => {
+  const g = analyze({ root: "./examples/mount" });
+  const eps = g.nodes.filter((n) => n.kind === "endpoint").map((e) => e.path).sort();
+  expect(eps).toEqual(["/api/users", "/api/users/:id"]);
+});

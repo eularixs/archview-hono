@@ -31,10 +31,52 @@ function resolveHandler(res: Result, last: Node): Node | undefined {
   return handler;
 }
 
+// Names that mount a sub-router under a path prefix.
+const MOUNT = new Set(["route", "use", "mount"]);
+
+function joinPath(a: string, b: string): string {
+  const x = (a + "/" + b).replace(/\/{2,}/g, "/");
+  return x.length > 1 ? x.replace(/\/$/, "") : x;
+}
+
 // Generic router extractor: X.<verb>("/path", ...handler) — Hono, Express,
 // Fastify, Elysia, … matched by verb name, string path, function-ish last arg.
+// Sub-routers mounted via app.route('/api', sub) contribute their prefix.
 export function extractRoutes(res: Result): Route[] {
   const out: Route[] = [...extractTrpc(res), ...extractNest(res)];
+
+  // Resolve an expression to the declaration of the router variable it names.
+  const routerDecl = (e: Node): Node | undefined => {
+    const sym = e.getSymbol();
+    const s = sym?.getAliasedSymbol() ?? sym;
+    return s?.getDeclarations()[0];
+  };
+  // child router decl -> { prefix, parent router decl }
+  const mounts = new Map<Node, { prefix: string; parent?: Node }>();
+  for (const sf of res.sourceFiles) {
+    for (const call of sf.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+      const expr = call.getExpression();
+      if (!Node.isPropertyAccessExpression(expr) || !MOUNT.has(expr.getName())) continue;
+      const args = call.getArguments();
+      if (args.length < 2 || !Node.isStringLiteral(args[0])) continue;
+      const child = routerDecl(args[1]);
+      if (!child || !Node.isVariableDeclaration(child)) continue;
+      mounts.set(child, { prefix: args[0].getLiteralValue(), parent: routerDecl(expr.getExpression()) });
+    }
+  }
+  const fullPrefix = (decl?: Node): string => {
+    let p = "";
+    let cur = decl;
+    const seen = new Set<Node>();
+    while (cur && mounts.has(cur) && !seen.has(cur)) {
+      seen.add(cur);
+      const m = mounts.get(cur)!;
+      p = joinPath(m.prefix, p);
+      cur = m.parent;
+    }
+    return p;
+  };
+
   for (const sf of res.sourceFiles) {
     for (const call of sf.getDescendantsOfKind(SyntaxKind.CallExpression)) {
       const expr = call.getExpression();
@@ -53,8 +95,10 @@ export function extractRoutes(res: Result): Route[] {
           if (Node.isCallExpression(a) && /upgradeWebSocket|upgradeWebsocket/.test(a.getExpression().getText())) { method = "WS"; break; }
         }
       }
+      const prefix = fullPrefix(routerDecl(expr.getExpression()));
+      const path = prefix ? joinPath(prefix, pathArg.getLiteralValue()) : pathArg.getLiteralValue();
       const { line, column } = sf.getLineAndColumnAtPos(call.getStart());
-      out.push({ method, path: pathArg.getLiteralValue(), handler, file: sf.getFilePath(), line, col: column });
+      out.push({ method, path, handler, file: sf.getFilePath(), line, col: column });
     }
   }
   return out;
